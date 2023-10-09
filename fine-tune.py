@@ -41,7 +41,7 @@ DEFAULT_UNK_TOKEN = "<unk>"
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(default="EleutherAI/pythia-1.4b-deduped")
-    model_type: Optional[str] = field(default="gpt-neox")
+    model_type: Optional[str] = field(default="lamma-2-ko")
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -153,8 +153,15 @@ def train():
     rank = int(os.environ.get('RANK', -1))
     if rank > 0:
         barrier()
-    dataset = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", cache_dir=training_args.cache_dir)
-    dataset = dataset.map(partial(tokenize_fn,tokenizer),batched=True, num_proc=128, remove_columns=["text", "meta"])
+    # dataset = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", cache_dir=training_args.cache_dir)
+    # dataset = dataset.map(partial(tokenize_fn,tokenizer),batched=True, num_proc=128, remove_columns=["text", "meta"])
+
+    from datasets import load_dataset, load_from_disk
+    save_path = "/home/chang/t9/Models/llama-2-ko-7b-16k/base-8000"
+    saved_dataset_path = f"{save_path}/dataset"
+    if os.path.exists(saved_dataset_path):
+        dataset = load_from_disk(f"{saved_dataset_path}/train")
+        ds_eval = load_from_disk(f"{saved_dataset_path}/eval")
 
     if rank == 0:
         barrier()
@@ -164,16 +171,10 @@ def train():
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     if training_args.low_rank_training:
-        if model_args.model_type == "gpt-neox":
-            # added `dense` to match with llama as the basic LoRA would only target 'query_key_value'
-            targets = ["query_key_value", "dense"]
-        else:
-            targets=["q_proj", "k_proj", "v_proj", "o_proj"],
-
         config = LoraConfig(
             r=8,
             lora_alpha=16,
-            target_modules=targets,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
             lora_dropout=0,
             bias="none",
             task_type="CAUSAL_LM",
@@ -187,7 +188,7 @@ def train():
     model.gradient_checkpointing_enable()  # enable gradient checkpointing
     trainer = Trainer(
         model=model, tokenizer=tokenizer, args=training_args, 
-        train_dataset=dataset["train"],
+        train_dataset=dataset,
         eval_dataset=None,
         data_collator=data_collator)
     trainer.train()
